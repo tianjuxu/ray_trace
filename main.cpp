@@ -18,6 +18,7 @@
 #include "sphere.h"
 #include "plane.h"
 #include "source.h"
+#include "triangle.h"
 using namespace std;
 /***************data struct to store basic color components***************/
 struct RGBType 
@@ -172,7 +173,7 @@ color getColorAt(vect intersectingPos,
 	color winningObjectColor  = sceneObjects.at(indexOfWinningObject)->getColor();
 	vect  winningObjectNormal = sceneObjects.at(indexOfWinningObject)->getNormalAtPoint(intersectingPos);
 	//draw black and white tiles if special is 2
-		if (winningObjectColor.getColorSpecial() == 2) {
+	if (winningObjectColor.getColorSpecial() == 2) {
 		// checkered/tile floor pattern
 		
 		int square = (int)floor(intersectingPos.getVectX()) + (int)floor(intersectingPos.getVectZ());
@@ -193,7 +194,7 @@ color getColorAt(vect intersectingPos,
 
     color finalColor = winningObjectColor.colorScalar(ambientLight);
 	//deal with reflection from nearby objects
-		if (winningObjectColor.getColorSpecial() > 0 && winningObjectColor.getColorSpecial() <= 1) {
+	if (winningObjectColor.getColorSpecial() > 0 && winningObjectColor.getColorSpecial() <= 1) {
 		// reflection from other objects with specular intensity
 		double dot1 = winningObjectNormal.dotProduct(intersectingRayDir.negative());
 		vect scalar1 = winningObjectNormal.vectMult(dot1);
@@ -258,9 +259,11 @@ color getColorAt(vect intersectingPos,
 					if(secondaryIntersections.at(i)<= distanceToLightMag)
 					{
 						shadowed = true;
+
 					}
+					break;
+
 				}
-				break;
 
 			}
 			
@@ -306,17 +309,22 @@ int main(int argc, char *argv[])
 	int n           = height*width;
 	RGBType *pixels = new RGBType [n];
 	
-	
+	int    aaDepth      = 4;//how small you want the pixel to be "divided". 1 means normal, greater than 1 means anti-aliasing
+	int    aaDivide     = aaDepth * aaDepth; //how many sub-pixels our aa pixel is divided into
+	double aaThreshold  = 0.1;
 	double ambientLight = 0.2;
-	double accuracy = 0.000000000001; //a magic constant to adjust caculations slightly 
+	double accuracy = 0.00000001; //a magic constant to adjust caculations slightly 
     double aspectRatio = (double)width/(double)height;
 	
-	
+	double xOffset, yOffset;//offsets to set the camera in the center of a pixel
+    int aaIndex; //anti-aliasing index
+	double aaRedPixel, aaGreenPixel, aaBluePixel;
     //scene basic set-ups
 	vect dirX (1, 0, 0);
 	vect dirY (0, 1, 0);
 	vect dirZ (0, 0, 1);
 	vect sphereCenter (0, 0, 0);
+	vect sphereCenter2 (0, 1.5, 0);
 
 	vect cameraPos (3, 1.5, -4);
 	
@@ -331,11 +339,12 @@ int main(int argc, char *argv[])
 	camera sceneCamera (cameraPos, cameraDirection, cameraRightVect, cameraDownVect);
 	
 	color whiteLight (1.0, 1.0, 1.0, 0);
-	color prettyGreen (0.5, 1.0, 0.5, 0.3);
-	color gray  (0.5, 0.5, 0.5, 0.0);
+	color green (0.5, 1.0, 0.5, 0.3);
+	color shinyGray  (0.5, 0.5, 0.5, 0.2);
 	color black (0, 0, 0, 0);
-	color maroon (0.5, 0.25, 0.25, 0);
+	color maroon (0.5, 0.25, 0.25, 0.2);
 	color checkerFloor (1, 1, 1, 2);
+	color blue (0.25, 0.5, 0.8, 0.2);
 
 	vect lightPosition (-7, 10, -10);
 	light sceneLight (lightPosition, whiteLight);
@@ -343,82 +352,144 @@ int main(int argc, char *argv[])
 	lightSources.push_back(dynamic_cast<source*>(&sceneLight));
 
 	//scene objects
-	sphere sceneSphere (sphereCenter, 1, prettyGreen);
+	sphere sceneSphere (sphereCenter, 1, green);
+	sphere sceneSphere2 (sphereCenter2, 0.5,blue);
 	plane scenePlane (dirY, -1, checkerFloor);
 	
 	vector<object*> sceneObjects;
 	sceneObjects.push_back(dynamic_cast<object*>(&sceneSphere));
+	sceneObjects.push_back(dynamic_cast<object*>(&sceneSphere2));
 	sceneObjects.push_back(dynamic_cast<object*>(&scenePlane));
 	
-	double xOffset, yOffset;
+	double aaRed[aaDivide];
+	double aaGreen[aaDivide];
+	double aaBlue[aaDivide];
+	
 	
 	for (int x=0; x<width;x++)
 	{
 		for(int y=0; y<height; y++)
 		{
 			current = y*width + x;
-			//start with no anti-aliasing
-			if (width > height) 
-			{//the image's width is larger than its height
-				xOffset = ((x+0.5)/(double)width)*aspectRatio - (((width - height)/(double) height)/2);
-				yOffset = ((height - y) + 0.5) / height;
-			}
-			else if (height > width)
-			{//the height is larger than width
-				xOffset = (x + 0.5) / width;
-				yOffset = (((height-y)+0.5)/height) / aspectRatio - (((height - width) / (double) width)/2);
-			}
-			else 
+			//temporary pixel for anti-aliasing
+			//anti-alasing loop starts
+			for (int i = 0; i < aaDepth; i++)
 			{
-				xOffset = (x + 0.5)/width;
-				yOffset = ((height - y) + 0.5)/height;
+				for(int j = 0; j < aaDepth; j++)
+				{
+					aaIndex = j*aaDepth + i;
+					//create the ray from the camera to this pixel
+					
+					if(aaDepth==1)
+					{
+						//start with no anti-aliasing
+						if (width > height) 
+						{//the image's width is larger than its height
+							xOffset = ((x+0.5)/(double)width)*aspectRatio - (((width - height)/(double) height)/2);
+							yOffset = ((height - y) + 0.5) / height;
+						}
+						else if (height > width)
+						{//the height is larger than width
+							xOffset = (x + 0.5) / width;
+							yOffset = (((height-y)+0.5)/height) / aspectRatio - (((height - width) / (double) width)/2);
+						}
+						else 
+						{
+							xOffset = (x + 0.5)/width;
+							yOffset = ((height - y) + 0.5)/height;
+						}
+					}
+					else if (aaDepth >1)
+					{
+						//anti-aliasing
+						if (width > height) 
+						{//the image's width is larger than its height
+							xOffset = ((x+(double)i/((double)aaDepth-1))/(double)width)*aspectRatio - (((width - height)/(double) height)/2);
+							yOffset = ((height - y) + (double)i/((double)aaDepth-1)) / height;
+						}
+						else if (height > width)
+						{//the height is larger than width
+							xOffset = (x + (double)i/((double)aaDepth-1)) / width;
+							yOffset = (((height-y)+(double)i/((double)aaDepth-1))/height) / aspectRatio - (((height - width) / (double) width)/2);
+						}
+						else 
+						{
+							xOffset = (x + (double)i/((double)aaDepth-1))/width;
+							yOffset = ((height - y) + (double)i/((double)aaDepth-1))/height;
+						}
+
+						
+					}
+					vect camRayOrigin    = sceneCamera.getCameraPosition();
+					vect camRayDirection = cameraDirection.vectAdd(cameraRightVect.vectMult(xOffset - 0.5).vectAdd(cameraDownVect.vectMult(yOffset - 0.5))).normalize();
+					
+					ray camRay (camRayOrigin, camRayDirection);
+					
+					vector<double> intersections;
+					
+					for (int index = 0; index < sceneObjects.size(); index++)
+					{
+						intersections.push_back(sceneObjects.at(index)->findIntersection(camRay));
+					}
+					
+					int indexOfWinningObject = winningObjectIndex (intersections);
+					
+					if(indexOfWinningObject == -1) 
+					{//set background black
+						aaRed[aaIndex] = 0;
+						aaGreen[aaIndex] = 0;
+						aaBlue[aaIndex] = 0;
+						
+					}
+					else
+					{
+						//index each of our objects in the scene
+						if(intersections.at(indexOfWinningObject) > accuracy)
+						{//caculation position and directions vectors at intersections
+							
+							vect intersectionPosition = camRayOrigin.vectAdd(camRayDirection.vectMult(intersections.at(indexOfWinningObject)));
+							vect intersectingRayDirection = camRayDirection;
+							
+							color intersectionColor = getColorAt(intersectionPosition, 
+																 intersectingRayDirection, 
+																 sceneObjects, 
+																 indexOfWinningObject, 
+																 lightSources,
+																 accuracy, 
+																 ambientLight);
+							
+							aaRed[aaIndex] = intersectionColor.getColorRed();
+							aaGreen[aaIndex] = intersectionColor.getColorGreen();
+							aaBlue[aaIndex] = intersectionColor.getColorBlue();
+						}
+					}
+				}
 			}
+		    //now we calculate the average of pixel color
+		    double redSum = 0;
+			double greenSum = 0;
+			double blueSum = 0;
 			
-			vect camRayOrigin    = sceneCamera.getCameraPosition();
-			vect camRayDirection = cameraDirection.vectAdd(cameraRightVect.vectMult(xOffset - 0.5).vectAdd(cameraDownVect.vectMult(yOffset - 0.5))).normalize();
-			
-			ray camRay (camRayOrigin, camRayDirection);
-			
-			vector<double> intersections;
-			
-			for (int index = 0; index < sceneObjects.size(); index++)
+			for (int indexColor = 0; indexColor < aaDivide; indexColor++)
 			{
-				intersections.push_back(sceneObjects.at(index)->findIntersection(camRay));
-			}
-			
-			int indexOfWinningObject = winningObjectIndex (intersections);
-			
-			if(indexOfWinningObject == -1) 
-			{//set background black
-				pixels[current].r = 0;
-				pixels[current].g = 0;
-				pixels[current].b = 0;
+				redSum = redSum + aaRed[indexColor];
+				greenSum = greenSum + aaGreen[indexColor];
+				blueSum = blueSum + aaBlue[indexColor];
 				
 			}
-			else
-			{
-				if(intersections.at(indexOfWinningObject) > accuracy)
-				{//caculation position and directions vectors at intersections
-					
-					vect intersectionPosition = camRayOrigin.vectAdd(camRayDirection.vectMult(intersections.at(indexOfWinningObject)));
-					vect intersectingRayDirection = camRayDirection;
-					
-					color intersectionColor = getColorAt(intersectionPosition, 
-					                                     intersectingRayDirection, 
-														 sceneObjects, 
-														 indexOfWinningObject, 
-														 lightSources,
-														 accuracy, 
-														 ambientLight);
-					
-					pixels[current].r = intersectionColor.getColorRed();
-					pixels[current].g = intersectionColor.getColorGreen();
-					pixels[current].b = intersectionColor.getColorBlue();
-				}
-            }
+			double finalRed   = redSum / (aaDivide);
+			double finalGreen = greenSum / (aaDivide);
+			double finalBlue  = blueSum / (aaDivide);
+			
+			pixels[current].r = finalRed;
+			pixels[current].g = finalGreen;
+			pixels[current].b = finalBlue;
+			
+			
 		}
 	}
 	
-	saveBmp("scene.bmp", width, height, dpi, pixels);
+	saveBmp("scene_aa.bmp", width, height, dpi, pixels);
+	delete pixels;
 	return 0;
 }
